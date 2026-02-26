@@ -183,7 +183,7 @@ async function renderRoute() {
 async function renderLogin() {
   app.innerHTML = `
     <section class="card login-card">
-      <h1 id="auth-title" class="title">Iniciar sesión</h1>
+      <h1 id="auth-title" class="title">Hola</h1>
       <p id="auth-subtitle" class="subtitle">Acceso a los módulos del sistema.</p>
       <div class="btn-group">
         <button id="tab-login" class="btn secondary" type="button">Iniciar sesión</button>
