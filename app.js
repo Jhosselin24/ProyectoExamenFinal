@@ -3,7 +3,7 @@ const nav = document.getElementById("nav");
 const userBadge = document.getElementById("user-badge");
 const logoutBtn = document.getElementById("logout-btn");
 
-
+const API_BASE = "https://back-gestion-de-tickets.vercel.app";
 
 const ROUTES = {
   login: renderLogin,
