@@ -3,7 +3,7 @@ const nav = document.getElementById("nav");
 const userBadge = document.getElementById("user-badge");
 const logoutBtn = document.getElementById("logout-btn");
 
-const API_BASE = "https://back-gestion-de-tickets-8pwm.vercel.app/";
+const API_BASE = "https://back-gestion-de-tickets.vercel.app/api";
 
 const ROUTES = {
   login: renderLogin,
@@ -125,6 +125,12 @@ function loginErrorMessage(error) {
   return error.message;
 }
 
+function registerErrorMessage(error) {
+  if (!(error instanceof ApiError)) return "No se pudo registrar el usuario.";
+  if (error.status === 0) return "No se pudo conectar con el backend.";
+  return error.message || "No se pudo registrar el usuario.";
+}
+
 function updateNav() {
   const session = getSession();
   if (!session) {
@@ -177,9 +183,13 @@ async function renderRoute() {
 async function renderLogin() {
   app.innerHTML = `
     <section class="card login-card">
-      <h1 class="title">Iniciar sesión</h1>
-      <p class="subtitle">Acceso a los módulos del sistema.</p>
-      <div id="login-alert" class="alert hidden"></div>
+      <h1 id="auth-title" class="title">Iniciar sesión</h1>
+      <p id="auth-subtitle" class="subtitle">Acceso a los módulos del sistema.</p>
+      <div class="btn-group">
+        <button id="tab-login" class="btn secondary" type="button">Iniciar sesión</button>
+        <button id="tab-register" class="btn ghost" type="button">Registrarse</button>
+      </div>
+      <div id="auth-alert" class="alert hidden"></div>
       <form id="login-form" class="form-grid">
         <div>
           <label>Email</label>
@@ -193,21 +203,84 @@ async function renderLogin() {
           <button id="login-btn" class="btn" type="submit">Ingresar</button>
         </div>
       </form>
-      <p class="subtitle">Usa un usuario registrado en el backend.</p>
+      <form id="register-form" class="form-grid hidden">
+        <div>
+          <label>Nombre</label>
+          <input type="text" name="nombre" placeholder="Tu nombre" required />
+        </div>
+        <div>
+          <label>Apellido</label>
+          <input type="text" name="apellido" placeholder="Tu apellido" required />
+        </div>
+        <div>
+          <label>Email</label>
+          <input type="email" name="email" placeholder="correo@empresa.com" required />
+        </div>
+        <div>
+          <label>Clave</label>
+          <input type="password" name="password" placeholder="********" required />
+        </div>
+        <div>
+          <label>Confirmar clave</label>
+          <input type="password" name="confirmPassword" placeholder="********" required />
+        </div>
+        <div class="btn-group">
+          <button id="register-btn" class="btn" type="submit">Crear cuenta</button>
+        </div>
+      </form>
+      <p id="auth-hint" class="subtitle">Usa un usuario registrado en el backend.</p>
     </section>
   `;
 
-  const form = document.getElementById("login-form");
-  const alertBox = document.getElementById("login-alert");
+  const title = document.getElementById("auth-title");
+  const subtitle = document.getElementById("auth-subtitle");
+  const hint = document.getElementById("auth-hint");
+  const tabLogin = document.getElementById("tab-login");
+  const tabRegister = document.getElementById("tab-register");
+  const loginForm = document.getElementById("login-form");
+  const registerForm = document.getElementById("register-form");
+  const alertBox = document.getElementById("auth-alert");
   const loginBtn = document.getElementById("login-btn");
+  const registerBtn = document.getElementById("register-btn");
 
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
+  function clearAlert() {
+    alertBox.textContent = "";
     alertBox.classList.add("hidden");
+    alertBox.classList.remove("ok");
+  }
+
+  function showAlert(message, type = "error") {
+    alertBox.textContent = message;
+    alertBox.classList.remove("hidden");
+    alertBox.classList.toggle("ok", type === "ok");
+  }
+
+  function setMode(mode) {
+    clearAlert();
+    const isLogin = mode === "login";
+    loginForm.classList.toggle("hidden", !isLogin);
+    registerForm.classList.toggle("hidden", isLogin);
+    tabLogin.className = isLogin ? "btn secondary" : "btn ghost";
+    tabRegister.className = isLogin ? "btn ghost" : "btn secondary";
+    title.textContent = isLogin ? "Iniciar sesión" : "Registrarse";
+    subtitle.textContent = isLogin
+      ? "Acceso a los módulos del sistema."
+      : "Crea un usuario para ingresar al sistema.";
+    hint.textContent = isLogin
+      ? "Usa un usuario registrado en el backend."
+      : "Después del registro podrás iniciar sesión.";
+  }
+
+  tabLogin.addEventListener("click", () => setMode("login"));
+  tabRegister.addEventListener("click", () => setMode("register"));
+
+  loginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    clearAlert();
     loginBtn.disabled = true;
 
-    const email = form.email.value.trim().toLowerCase();
-    const password = form.password.value.trim();
+    const email = loginForm.email.value.trim().toLowerCase();
+    const password = loginForm.password.value.trim();
 
     try {
       const data = await apiRequest("/login", {
@@ -224,15 +297,51 @@ async function renderLogin() {
         userId: data._id,
       });
 
-      form.reset();
+      loginForm.reset();
       window.location.hash = "#/modulos";
     } catch (error) {
-      alertBox.textContent = loginErrorMessage(error);
-      alertBox.classList.remove("hidden");
+      showAlert(loginErrorMessage(error));
     } finally {
       loginBtn.disabled = false;
     }
   });
+
+  registerForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    clearAlert();
+    registerBtn.disabled = true;
+
+    const nombre = registerForm.nombre.value.trim();
+    const apellido = registerForm.apellido.value.trim();
+    const email = registerForm.email.value.trim().toLowerCase();
+    const password = registerForm.password.value.trim();
+    const confirmPassword = registerForm.confirmPassword.value.trim();
+
+    if (password !== confirmPassword) {
+      showAlert("Las contraseñas no coinciden.");
+      registerBtn.disabled = false;
+      return;
+    }
+
+    try {
+      await apiRequest("/registro", {
+        method: "POST",
+        auth: false,
+        body: { nombre, apellido, email, password },
+      });
+
+      registerForm.reset();
+      setMode("login");
+      loginForm.email.value = email;
+      showAlert("Usuario registrado correctamente. Ahora inicia sesión.", "ok");
+    } catch (error) {
+      showAlert(registerErrorMessage(error));
+    } finally {
+      registerBtn.disabled = false;
+    }
+  });
+
+  setMode("login");
 }
 
 async function renderModulos() {
@@ -787,9 +896,4 @@ window.addEventListener("hashchange", () => {
   renderRoute();
 });
 
-renderRoute();
-
-
-ensureSeedData();
-window.addEventListener("hashchange", renderRoute);
 renderRoute();
