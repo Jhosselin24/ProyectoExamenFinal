@@ -3,73 +3,7 @@ const nav = document.getElementById("nav");
 const userBadge = document.getElementById("user-badge");
 const logoutBtn = document.getElementById("logout-btn");
 
-const USERS = [
-  {
-    id: 1,
-    name: "Administrador",
-    email: "admin@soporte.com",
-    password: "Admin123",
-  },
-  {
-    id: 2,
-    name: "Soporte",
-    email: "soporte@soporte.com",
-    password: "Soporte123",
-  },
-];
-
-const STORE_KEYS = {
-  tecnicos: "app_tecnicos",
-  clientes: "app_clientes",
-  tickets: "app_tickets",
-};
-
-const DEFAULT_DATA = {
-  tecnicos: [
-    {
-      id: 1,
-      nombre: "Carla Mejia",
-      email: "cmejia@soporte.com",
-      telefono: "099 345 2211",
-      especialidad: "Redes",
-    },
-    {
-      id: 2,
-      nombre: "Luis Herrera",
-      email: "lherrera@soporte.com",
-      telefono: "098 445 1177",
-      especialidad: "Hardware",
-    },
-  ],
-  clientes: [
-    {
-      id: 1,
-      nombre: "Karla Tapia",
-      email: "ktapia@empresa.com",
-      telefono: "098 112 3344",
-      empresa: "NovaTech",
-    },
-    {
-      id: 2,
-      nombre: "Miguel Luna",
-      email: "mluna@empresa.com",
-      telefono: "097 445 8899",
-      empresa: "AndesWare",
-    },
-  ],
-  tickets: [
-    {
-      id: 1,
-      clienteId: 1,
-      tecnicoIds: [1, 2],
-      asunto: "Conexion intermitente",
-      descripcion: "La red de oficina se corta cada hora.",
-      prioridad: "Alta",
-      estado: "En proceso",
-      fecha: "2026-02-20",
-    },
-  ],
-};
+const API_BASE = "https://back-gestion-de-tickets.vercel.app/api";
 
 const ROUTES = {
   login: renderLogin,
@@ -79,45 +13,116 @@ const ROUTES = {
   tickets: renderTickets,
 };
 
+class ApiError extends Error {
+  constructor(message, status, authIssue = false) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.authIssue = authIssue;
+  }
+}
+
 function getSession() {
   const raw = localStorage.getItem("session");
   return raw ? JSON.parse(raw) : null;
 }
 
-function setSession(user) {
-  localStorage.setItem("session", JSON.stringify(user));
+function setSession(session) {
+  localStorage.setItem("session", JSON.stringify(session));
 }
 
 function clearSession() {
   localStorage.removeItem("session");
 }
 
-function readStore(key) {
-  const raw = localStorage.getItem(key);
-  return raw ? JSON.parse(raw) : [];
-}
-
-function writeStore(key, data) {
-  localStorage.setItem(key, JSON.stringify(data));
-}
-
-function ensureSeedData() {
-  Object.keys(STORE_KEYS).forEach((key) => {
-    const storeKey = STORE_KEYS[key];
-    if (!localStorage.getItem(storeKey)) {
-      writeStore(storeKey, DEFAULT_DATA[key]);
-    }
-  });
-}
-
-function nextId(items) {
-  if (!items.length) return 1;
-  return Math.max(...items.map((item) => item.id)) + 1;
-}
-
 function getRoute() {
   const hash = window.location.hash.replace("#/", "");
   return hash || "login";
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function normalizeDate(rawDate) {
+  if (!rawDate) return "";
+  const date = new Date(rawDate);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
+function getEntityId(entity) {
+  if (!entity) return "";
+  if (typeof entity === "string") return entity;
+  return entity._id || "";
+}
+
+async function apiRequest(path, options = {}) {
+  const { method = "GET", body, auth = true } = options;
+  const headers = {};
+  const session = getSession();
+
+  if (auth) {
+    if (!session?.token) {
+      throw new ApiError("No hay una sesión activa.", 401, true);
+    }
+    headers.Authorization = `Bearer ${session.token}`;
+  }
+
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch (error) {
+    throw new ApiError("No se pudo conectar con el backend.", 0, false);
+  }
+
+  let data = {};
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+
+  if (!response.ok) {
+    const message = data.msg || `Error HTTP ${response.status}`;
+    const authIssue = /token/i.test(message);
+    throw new ApiError(message, response.status, authIssue);
+  }
+
+  return data;
+}
+
+function handleProtectedError(error) {
+  if (error instanceof ApiError && (error.authIssue || error.status === 401)) {
+    clearSession();
+    updateNav();
+    window.location.hash = "#/login";
+    return "Tu sesión expiró o no es válida.";
+  }
+  if (error instanceof ApiError) return error.message;
+  return "Ocurrió un error inesperado.";
+}
+
+function loginErrorMessage(error) {
+  if (!(error instanceof ApiError)) return "Usuario o contraseña incorrectos.";
+  if (error.status === 404) return "Usuario o contraseña incorrectos.";
+  if (error.status === 0) return "No se pudo conectar con el backend.";
+  if (/usuario|password|clave|credencial/i.test(error.message)) {
+    return "Usuario o contraseña incorrectos.";
+  }
+  return error.message;
 }
 
 function updateNav() {
@@ -145,11 +150,12 @@ function updateNav() {
         }">${link.label}</a>`
     )
     .join("");
+
   userBadge.textContent = `Sesión: ${session.name}`;
   logoutBtn.classList.remove("hidden");
 }
 
-function renderRoute() {
+async function renderRoute() {
   const session = getSession();
   const route = getRoute();
 
@@ -165,10 +171,10 @@ function renderRoute() {
 
   updateNav();
   const render = ROUTES[route] || renderLogin;
-  render();
+  await render();
 }
 
-function renderLogin() {
+async function renderLogin() {
   app.innerHTML = `
     <section class="card login-card">
       <h1 class="title">Iniciar sesión</h1>
@@ -181,45 +187,60 @@ function renderLogin() {
         </div>
         <div>
           <label>Clave</label>
-          <input type="password" name="password" placeholder="••••••••" required />
+          <input type="password" name="password" placeholder="********" required />
         </div>
         <div class="btn-group">
-          <button class="btn" type="submit">Ingresar</button>
+          <button id="login-btn" class="btn" type="submit">Ingresar</button>
         </div>
       </form>
-      <p class="subtitle">Usuario demo: admin@soporte.com · Clave: Admin123</p>
+      <p class="subtitle">Usa un usuario registrado en el backend.</p>
     </section>
   `;
 
   const form = document.getElementById("login-form");
   const alertBox = document.getElementById("login-alert");
+  const loginBtn = document.getElementById("login-btn");
 
-  form.addEventListener("submit", (event) => {
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    alertBox.classList.add("hidden");
+    loginBtn.disabled = true;
+
     const email = form.email.value.trim().toLowerCase();
     const password = form.password.value.trim();
-    const user = USERS.find(
-      (item) =>
-        item.email.toLowerCase() === email && item.password === password
-    );
 
-    if (!user) {
-      alertBox.textContent = "Usuario o contraseña incorrectos.";
+    try {
+      const data = await apiRequest("/login", {
+        method: "POST",
+        auth: false,
+        body: { email, password },
+      });
+
+      const fullName = [data.nombre, data.apellido].filter(Boolean).join(" ");
+      setSession({
+        token: data.token,
+        name: fullName || data.email,
+        email: data.email,
+        userId: data._id,
+      });
+
+      form.reset();
+      window.location.hash = "#/modulos";
+    } catch (error) {
+      alertBox.textContent = loginErrorMessage(error);
       alertBox.classList.remove("hidden");
-      return;
+    } finally {
+      loginBtn.disabled = false;
     }
-
-    setSession({ name: user.name, email: user.email });
-    form.reset();
-    window.location.hash = "#/modulos";
   });
 }
 
-function renderModulos() {
+async function renderModulos() {
   const session = getSession();
+
   app.innerHTML = `
     <section class="card">
-      <div class="welcome">Bienvenido - ${session.name}</div>
+      <div class="welcome">Bienvenido - ${escapeHtml(session.name)}</div>
       <h1 class="title">Módulos asignados</h1>
       <p class="subtitle">Seleccione un módulo para iniciar la gestión.</p>
       <div class="grid cols-3">
@@ -230,12 +251,12 @@ function renderModulos() {
         </div>
         <div class="card module-card">
           <h3>Clientes</h3>
-          <p>Administración de clientes y contactos.</p>
+          <p>Administración de clientes.</p>
           <button class="btn secondary" data-go="clientes">Entrar</button>
         </div>
         <div class="card module-card">
           <h3>Tickets</h3>
-          <p>Reservas, asignaciones y seguimiento.</p>
+          <p>Gestión de tickets de asistencia.</p>
           <button class="btn secondary" data-go="tickets">Entrar</button>
         </div>
       </div>
@@ -249,35 +270,45 @@ function renderModulos() {
   });
 }
 
-function renderTecnicos() {
+async function renderTecnicos() {
   const session = getSession();
-  const tecnicos = readStore(STORE_KEYS.tecnicos);
+  let tecnicos = [];
+  let globalError = "";
+
+  try {
+    const data = await apiRequest("/tecnicos");
+    tecnicos = data.tecnicos || [];
+  } catch (error) {
+    globalError = handleProtectedError(error);
+  }
 
   app.innerHTML = `
     <section class="card">
-      <div class="welcome">Bienvenido - ${session.name}</div>
+      <div class="welcome">Bienvenido - ${escapeHtml(session.name)}</div>
       <h1 class="title">Técnicos</h1>
-      <p class="subtitle">Gestión CRUD de técnicos registrados.</p>
+      <p class="subtitle">Gestión CRUD conectada al backend.</p>
+      ${globalError ? `<div class="alert">${escapeHtml(globalError)}</div>` : ""}
+      <div id="tecnico-form-alert" class="alert hidden"></div>
       <form id="tecnico-form" class="form-grid">
         <input type="hidden" name="id" />
+        <div><label>Nombre</label><input name="nombre" required /></div>
+        <div><label>Apellido</label><input name="apellido" required /></div>
+        <div><label>Cédula</label><input name="cedula" required /></div>
+        <div><label>Fecha de nacimiento</label><input type="date" name="fecha_de_nacimiento" required /></div>
         <div>
-          <label>Nombre</label>
-          <input name="nombre" required />
+          <label>Género</label>
+          <select name="genero" required>
+            <option value="Masculino">Masculino</option>
+            <option value="Femenino">Femenino</option>
+            <option value="Otro">Otro</option>
+          </select>
         </div>
-        <div>
-          <label>Email</label>
-          <input type="email" name="email" required />
-        </div>
-        <div>
-          <label>Teléfono</label>
-          <input name="telefono" required />
-        </div>
-        <div>
-          <label>Especialidad</label>
-          <input name="especialidad" required />
-        </div>
+        <div><label>Ciudad</label><input name="ciudad" required /></div>
+        <div><label>Dirección</label><input name="direccion" required /></div>
+        <div><label>Teléfono</label><input name="telefono" required /></div>
+        <div><label>Email</label><input type="email" name="email" required /></div>
         <div class="btn-group">
-          <button class="btn" type="submit">Guardar técnico</button>
+          <button class="btn" type="submit" id="tecnico-save">Guardar técnico</button>
           <button class="btn ghost" type="button" id="tecnico-cancel">Cancelar</button>
         </div>
       </form>
@@ -287,11 +318,11 @@ function renderTecnicos() {
       <table class="table">
         <thead>
           <tr>
-            <th>ID</th>
             <th>Nombre</th>
+            <th>Cédula</th>
             <th>Email</th>
             <th>Teléfono</th>
-            <th>Especialidad</th>
+            <th>Ciudad</th>
             <th>Acciones</th>
           </tr>
         </thead>
@@ -302,14 +333,14 @@ function renderTecnicos() {
                   .map(
                     (item) => `
             <tr>
-              <td>${item.id}</td>
-              <td>${item.nombre}</td>
-              <td>${item.email}</td>
-              <td>${item.telefono}</td>
-              <td>${item.especialidad}</td>
+              <td>${escapeHtml(item.nombre)} ${escapeHtml(item.apellido)}</td>
+              <td>${escapeHtml(item.cedula)}</td>
+              <td>${escapeHtml(item.email)}</td>
+              <td>${escapeHtml(item.telefono)}</td>
+              <td>${escapeHtml(item.ciudad)}</td>
               <td class="btn-group">
-                <button class="btn secondary" data-edit="${item.id}">Editar</button>
-                <button class="btn danger" data-delete="${item.id}">Eliminar</button>
+                <button class="btn secondary" data-edit="${item._id}">Editar</button>
+                <button class="btn danger" data-delete="${item._id}">Eliminar</button>
               </td>
             </tr>
           `
@@ -323,29 +354,47 @@ function renderTecnicos() {
   `;
 
   const form = document.getElementById("tecnico-form");
+  const saveBtn = document.getElementById("tecnico-save");
   const cancelBtn = document.getElementById("tecnico-cancel");
+  const formAlert = document.getElementById("tecnico-form-alert");
 
-  form.addEventListener("submit", (event) => {
+  if (globalError) {
+    saveBtn.disabled = true;
+    return;
+  }
+
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const data = new FormData(form);
-    const id = Number(data.get("id"));
+    formAlert.classList.add("hidden");
+    saveBtn.disabled = true;
+
     const payload = {
-      id: id || nextId(tecnicos),
-      nombre: data.get("nombre").trim(),
-      email: data.get("email").trim(),
-      telefono: data.get("telefono").trim(),
-      especialidad: data.get("especialidad").trim(),
+      nombre: form.nombre.value.trim(),
+      apellido: form.apellido.value.trim(),
+      cedula: Number(form.cedula.value.trim()),
+      fecha_de_nacimiento: form.fecha_de_nacimiento.value,
+      fecha_nacimiento: form.fecha_de_nacimiento.value,
+      genero: form.genero.value,
+      ciudad: form.ciudad.value.trim(),
+      direccion: form.direccion.value.trim(),
+      telefono: form.telefono.value.trim(),
+      email: form.email.value.trim().toLowerCase(),
     };
 
-    if (id) {
-      const index = tecnicos.findIndex((item) => item.id === id);
-      tecnicos[index] = payload;
-    } else {
-      tecnicos.push(payload);
-    }
+    const id = form.id.value.trim();
 
-    writeStore(STORE_KEYS.tecnicos, tecnicos);
-    renderTecnicos();
+    try {
+      if (id) {
+        await apiRequest(`/tecnico/${id}`, { method: "PUT", body: payload });
+      } else {
+        await apiRequest("/tecnico", { method: "POST", body: payload });
+      }
+      await renderTecnicos();
+    } catch (error) {
+      formAlert.textContent = handleProtectedError(error);
+      formAlert.classList.remove("hidden");
+      saveBtn.disabled = false;
+    }
   });
 
   cancelBtn.addEventListener("click", () => {
@@ -355,56 +404,66 @@ function renderTecnicos() {
 
   app.querySelectorAll("[data-edit]").forEach((button) => {
     button.addEventListener("click", () => {
-      const id = Number(button.dataset.edit);
-      const item = tecnicos.find((t) => t.id === id);
-      form.id.value = item.id;
-      form.nombre.value = item.nombre;
-      form.email.value = item.email;
-      form.telefono.value = item.telefono;
-      form.especialidad.value = item.especialidad;
+      const item = tecnicos.find((tecnico) => tecnico._id === button.dataset.edit);
+      if (!item) return;
+      form.id.value = item._id;
+      form.nombre.value = item.nombre || "";
+      form.apellido.value = item.apellido || "";
+      form.cedula.value = item.cedula || "";
+      form.fecha_de_nacimiento.value = normalizeDate(item.fecha_de_nacimiento);
+      form.genero.value = item.genero || "Masculino";
+      form.ciudad.value = item.ciudad || "";
+      form.direccion.value = item.direccion || "";
+      form.telefono.value = item.telefono || "";
+      form.email.value = item.email || "";
       form.scrollIntoView({ behavior: "smooth", block: "center" });
     });
   });
 
   app.querySelectorAll("[data-delete]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const id = Number(button.dataset.delete);
-      const filtered = tecnicos.filter((item) => item.id !== id);
-      writeStore(STORE_KEYS.tecnicos, filtered);
-      renderTecnicos();
+    button.addEventListener("click", async () => {
+      try {
+        await apiRequest(`/tecnico/${button.dataset.delete}`, { method: "DELETE" });
+        await renderTecnicos();
+      } catch (error) {
+        formAlert.textContent = handleProtectedError(error);
+        formAlert.classList.remove("hidden");
+      }
     });
   });
 }
 
-function renderClientes() {
+async function renderClientes() {
   const session = getSession();
-  const clientes = readStore(STORE_KEYS.clientes);
+  let clientes = [];
+  let globalError = "";
+
+  try {
+    const data = await apiRequest("/clientes");
+    clientes = data.clientes || [];
+  } catch (error) {
+    globalError = handleProtectedError(error);
+  }
 
   app.innerHTML = `
     <section class="card">
-      <div class="welcome">Bienvenido - ${session.name}</div>
+      <div class="welcome">Bienvenido - ${escapeHtml(session.name)}</div>
       <h1 class="title">Clientes</h1>
-      <p class="subtitle">Gestión CRUD de clientes.</p>
+      <p class="subtitle">Gestión CRUD conectada al backend.</p>
+      ${globalError ? `<div class="alert">${escapeHtml(globalError)}</div>` : ""}
+      <div id="cliente-form-alert" class="alert hidden"></div>
       <form id="cliente-form" class="form-grid">
         <input type="hidden" name="id" />
-        <div>
-          <label>Nombre</label>
-          <input name="nombre" required />
-        </div>
-        <div>
-          <label>Email</label>
-          <input type="email" name="email" required />
-        </div>
-        <div>
-          <label>Teléfono</label>
-          <input name="telefono" required />
-        </div>
-        <div>
-          <label>Empresa</label>
-          <input name="empresa" required />
-        </div>
+        <div><label>Cédula</label><input name="cedula" required /></div>
+        <div><label>Nombre</label><input name="nombre" required /></div>
+        <div><label>Apellido</label><input name="apellido" required /></div>
+        <div><label>Ciudad</label><input name="ciudad" required /></div>
+        <div><label>Email</label><input type="email" name="email" required /></div>
+        <div><label>Dirección</label><input name="direccion" required /></div>
+        <div><label>Teléfono</label><input name="telefono" required /></div>
+        <div><label>Fecha de nacimiento</label><input type="date" name="fecha_de_nacimiento" required /></div>
         <div class="btn-group">
-          <button class="btn" type="submit">Guardar cliente</button>
+          <button class="btn" type="submit" id="cliente-save">Guardar cliente</button>
           <button class="btn ghost" type="button" id="cliente-cancel">Cancelar</button>
         </div>
       </form>
@@ -414,11 +473,11 @@ function renderClientes() {
       <table class="table">
         <thead>
           <tr>
-            <th>ID</th>
             <th>Nombre</th>
+            <th>Cédula</th>
             <th>Email</th>
             <th>Teléfono</th>
-            <th>Empresa</th>
+            <th>Ciudad</th>
             <th>Acciones</th>
           </tr>
         </thead>
@@ -429,14 +488,14 @@ function renderClientes() {
                   .map(
                     (item) => `
             <tr>
-              <td>${item.id}</td>
-              <td>${item.nombre}</td>
-              <td>${item.email}</td>
-              <td>${item.telefono}</td>
-              <td>${item.empresa}</td>
+              <td>${escapeHtml(item.nombre)} ${escapeHtml(item.apellido)}</td>
+              <td>${escapeHtml(item.cedula)}</td>
+              <td>${escapeHtml(item.email)}</td>
+              <td>${escapeHtml(item.telefono)}</td>
+              <td>${escapeHtml(item.ciudad)}</td>
               <td class="btn-group">
-                <button class="btn secondary" data-edit="${item.id}">Editar</button>
-                <button class="btn danger" data-delete="${item.id}">Eliminar</button>
+                <button class="btn secondary" data-edit="${item._id}">Editar</button>
+                <button class="btn danger" data-delete="${item._id}">Eliminar</button>
               </td>
             </tr>
           `
@@ -450,29 +509,46 @@ function renderClientes() {
   `;
 
   const form = document.getElementById("cliente-form");
+  const saveBtn = document.getElementById("cliente-save");
   const cancelBtn = document.getElementById("cliente-cancel");
+  const formAlert = document.getElementById("cliente-form-alert");
 
-  form.addEventListener("submit", (event) => {
+  if (globalError) {
+    saveBtn.disabled = true;
+    return;
+  }
+
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const data = new FormData(form);
-    const id = Number(data.get("id"));
+    formAlert.classList.add("hidden");
+    saveBtn.disabled = true;
+
     const payload = {
-      id: id || nextId(clientes),
-      nombre: data.get("nombre").trim(),
-      email: data.get("email").trim(),
-      telefono: data.get("telefono").trim(),
-      empresa: data.get("empresa").trim(),
+      cedula: Number(form.cedula.value.trim()),
+      nombre: form.nombre.value.trim(),
+      apellido: form.apellido.value.trim(),
+      ciudad: form.ciudad.value.trim(),
+      email: form.email.value.trim().toLowerCase(),
+      direccion: form.direccion.value.trim(),
+      telefono: form.telefono.value.trim(),
+      fecha_de_nacimiento: form.fecha_de_nacimiento.value,
+      fecha_nacimiento: form.fecha_de_nacimiento.value,
     };
 
-    if (id) {
-      const index = clientes.findIndex((item) => item.id === id);
-      clientes[index] = payload;
-    } else {
-      clientes.push(payload);
-    }
+    const id = form.id.value.trim();
 
-    writeStore(STORE_KEYS.clientes, clientes);
-    renderClientes();
+    try {
+      if (id) {
+        await apiRequest(`/cliente/${id}`, { method: "PUT", body: payload });
+      } else {
+        await apiRequest("/cliente", { method: "POST", body: payload });
+      }
+      await renderClientes();
+    } catch (error) {
+      formAlert.textContent = handleProtectedError(error);
+      formAlert.classList.remove("hidden");
+      saveBtn.disabled = false;
+    }
   });
 
   cancelBtn.addEventListener("click", () => {
@@ -482,97 +558,102 @@ function renderClientes() {
 
   app.querySelectorAll("[data-edit]").forEach((button) => {
     button.addEventListener("click", () => {
-      const id = Number(button.dataset.edit);
-      const item = clientes.find((c) => c.id === id);
-      form.id.value = item.id;
-      form.nombre.value = item.nombre;
-      form.email.value = item.email;
-      form.telefono.value = item.telefono;
-      form.empresa.value = item.empresa;
+      const item = clientes.find((cliente) => cliente._id === button.dataset.edit);
+      if (!item) return;
+      form.id.value = item._id;
+      form.cedula.value = item.cedula || "";
+      form.nombre.value = item.nombre || "";
+      form.apellido.value = item.apellido || "";
+      form.ciudad.value = item.ciudad || "";
+      form.email.value = item.email || "";
+      form.direccion.value = item.direccion || "";
+      form.telefono.value = item.telefono || "";
+      form.fecha_de_nacimiento.value = normalizeDate(item.fecha_de_nacimiento);
       form.scrollIntoView({ behavior: "smooth", block: "center" });
     });
   });
 
   app.querySelectorAll("[data-delete]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const id = Number(button.dataset.delete);
-      const filtered = clientes.filter((item) => item.id !== id);
-      writeStore(STORE_KEYS.clientes, filtered);
-      renderClientes();
+    button.addEventListener("click", async () => {
+      try {
+        await apiRequest(`/cliente/${button.dataset.delete}`, { method: "DELETE" });
+        await renderClientes();
+      } catch (error) {
+        formAlert.textContent = handleProtectedError(error);
+        formAlert.classList.remove("hidden");
+      }
     });
   });
 }
 
-function renderTickets() {
+async function renderTickets() {
   const session = getSession();
-  const tickets = readStore(STORE_KEYS.tickets);
-  const clientes = readStore(STORE_KEYS.clientes);
-  const tecnicos = readStore(STORE_KEYS.tecnicos);
+  let tickets = [];
+  let clientes = [];
+  let tecnicos = [];
+  let globalError = "";
 
-  const hasData = clientes.length && tecnicos.length;
-  const techChecklist = tecnicos
-    .map(
-      (item) => `
-        <label>
-          <input type="checkbox" name="tecnicos" value="${item.id}" />
-          ${item.nombre} · ${item.especialidad}
-        </label>
-      `
-    )
-    .join("");
+  try {
+    const [ticketsRes, clientesRes, tecnicosRes] = await Promise.all([
+      apiRequest("/tickets"),
+      apiRequest("/clientes"),
+      apiRequest("/tecnicos"),
+    ]);
+    tickets = ticketsRes.tickets || [];
+    clientes = clientesRes.clientes || [];
+    tecnicos = tecnicosRes.tecnicos || [];
+  } catch (error) {
+    globalError = handleProtectedError(error);
+  }
+
+  const hasData = clientes.length > 0 && tecnicos.length > 0;
 
   app.innerHTML = `
     <section class="card">
-      <div class="welcome">Bienvenido - ${session.name}</div>
+      <div class="welcome">Bienvenido - ${escapeHtml(session.name)}</div>
       <h1 class="title">Tickets</h1>
-      <p class="subtitle">Gestión de reservas de asistencia.</p>
+      <p class="subtitle">Gestión CRUD conectada al backend.</p>
+      ${globalError ? `<div class="alert">${escapeHtml(globalError)}</div>` : ""}
       ${
-        hasData
-          ? ""
-          : `<div class="alert">Para crear tickets necesitas al menos un cliente y un técnico registrados.</div>`
+        !globalError && !hasData
+          ? `<div class="alert">Para crear tickets necesitas al menos un cliente y un técnico.</div>`
+          : ""
       }
+      <div id="ticket-form-alert" class="alert hidden"></div>
       <form id="ticket-form" class="form-grid">
         <input type="hidden" name="id" />
+        <div><label>Código</label><input name="codigo" required /></div>
         <div>
           <label>Cliente</label>
           <select name="cliente" required>
             <option value="">Selecciona un cliente</option>
             ${clientes
               .map(
-                (item) => `<option value="${item.id}">${item.nombre}</option>`
+                (item) =>
+                  `<option value="${item._id}">${escapeHtml(item.nombre)} ${escapeHtml(
+                    item.apellido
+                  )}</option>`
               )
               .join("")}
           </select>
         </div>
         <div>
-          <label>Prioridad</label>
-          <select name="prioridad" required>
-            <option value="Alta">Alta</option>
-            <option value="Media" selected>Media</option>
-            <option value="Baja">Baja</option>
+          <label>Técnico</label>
+          <select name="tecnico" required>
+            <option value="">Selecciona un técnico</option>
+            ${tecnicos
+              .map(
+                (item) =>
+                  `<option value="${item._id}">${escapeHtml(item.nombre)} ${escapeHtml(
+                    item.apellido
+                  )}</option>`
+              )
+              .join("")}
           </select>
-        </div>
-        <div>
-          <label>Estado</label>
-          <select name="estado" required>
-            <option value="Abierto">Abierto</option>
-            <option value="En proceso" selected>En proceso</option>
-            <option value="Cerrado">Cerrado</option>
-          </select>
-        </div>
-        <div>
-          <label>Asunto</label>
-          <input name="asunto" required />
         </div>
         <div>
           <label>Descripción</label>
           <textarea name="descripcion" required></textarea>
-        </div>
-        <div>
-          <label>Técnicos asignados</label>
-          <div class="checklist">
-            ${techChecklist || "<span>No hay técnicos.</span>"}
-          </div>
         </div>
         <div class="btn-group">
           <button class="btn" type="submit" id="ticket-save">Guardar ticket</button>
@@ -585,12 +666,11 @@ function renderTickets() {
       <table class="table">
         <thead>
           <tr>
-            <th>ID</th>
+            <th>Código</th>
             <th>Cliente</th>
-            <th>Técnicos</th>
-            <th>Prioridad</th>
-            <th>Estado</th>
-            <th>Fecha</th>
+            <th>Técnico</th>
+            <th>Descripción</th>
+            <th>Creado</th>
             <th>Acciones</th>
           </tr>
         </thead>
@@ -599,35 +679,28 @@ function renderTickets() {
             tickets.length
               ? tickets
                   .map((ticket) => {
-                    const cliente =
-                      clientes.find((c) => c.id === ticket.clienteId) || {};
-                    const tecnicosAsignados = ticket.tecnicoIds
-                      .map(
-                        (id) =>
-                          tecnicos.find((t) => t.id === id)?.nombre || "N/D"
-                      )
-                      .filter(Boolean);
+                    const clienteNombre = ticket.cliente
+                      ? `${ticket.cliente.nombre || ""} ${ticket.cliente.apellido || ""}`.trim()
+                      : "N/D";
+                    const tecnicoNombre = ticket.tecnico
+                      ? `${ticket.tecnico.nombre || ""} ${ticket.tecnico.apellido || ""}`.trim()
+                      : "N/D";
                     return `
                       <tr>
-                        <td>${ticket.id}</td>
-                        <td>${cliente.nombre || "N/D"}</td>
-                        <td>
-                          ${tecnicosAsignados
-                            .map((name) => `<span class="chip">${name}</span>`)
-                            .join("")}
-                        </td>
-                        <td>${ticket.prioridad}</td>
-                        <td>${ticket.estado}</td>
-                        <td>${ticket.fecha}</td>
+                        <td>${escapeHtml(ticket.codigo)}</td>
+                        <td>${escapeHtml(clienteNombre)}</td>
+                        <td>${escapeHtml(tecnicoNombre)}</td>
+                        <td>${escapeHtml(ticket.descripcion)}</td>
+                        <td>${escapeHtml(normalizeDate(ticket.createdAt))}</td>
                         <td class="btn-group">
-                          <button class="btn secondary" data-edit="${ticket.id}">Editar</button>
-                          <button class="btn danger" data-delete="${ticket.id}">Eliminar</button>
+                          <button class="btn secondary" data-edit="${ticket._id}">Editar</button>
+                          <button class="btn danger" data-delete="${ticket._id}">Eliminar</button>
                         </td>
                       </tr>
                     `;
                   })
                   .join("")
-              : `<tr><td colspan="7">No hay tickets registrados.</td></tr>`
+              : `<tr><td colspan="6">No hay tickets registrados.</td></tr>`
           }
         </tbody>
       </table>
@@ -635,77 +708,71 @@ function renderTickets() {
   `;
 
   const form = document.getElementById("ticket-form");
-  const cancelBtn = document.getElementById("ticket-cancel");
   const saveBtn = document.getElementById("ticket-save");
+  const cancelBtn = document.getElementById("ticket-cancel");
+  const formAlert = document.getElementById("ticket-form-alert");
 
-  if (!hasData) {
+  if (globalError || !hasData) {
     saveBtn.disabled = true;
+    return;
   }
 
-  form.addEventListener("submit", (event) => {
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!hasData) return;
-
-    const data = new FormData(form);
-    const id = Number(data.get("id"));
-    const tecnicoIds = [
-      ...form.querySelectorAll("input[name='tecnicos']:checked"),
-    ].map((input) => Number(input.value));
+    formAlert.classList.add("hidden");
+    saveBtn.disabled = true;
 
     const payload = {
-      id: id || nextId(tickets),
-      clienteId: Number(data.get("cliente")),
-      tecnicoIds,
-      asunto: data.get("asunto").trim(),
-      descripcion: data.get("descripcion").trim(),
-      prioridad: data.get("prioridad"),
-      estado: data.get("estado"),
-      fecha: new Date().toISOString().slice(0, 10),
+      codigo: form.codigo.value.trim(),
+      descripcion: form.descripcion.value.trim(),
+      cliente: form.cliente.value,
+      tecnico: form.tecnico.value,
     };
 
-    if (id) {
-      const index = tickets.findIndex((item) => item.id === id);
-      tickets[index] = { ...tickets[index], ...payload };
-    } else {
-      tickets.push(payload);
-    }
+    const id = form.id.value.trim();
 
-    writeStore(STORE_KEYS.tickets, tickets);
-    renderTickets();
+    try {
+      if (id) {
+        await apiRequest(`/ticket/${id}`, { method: "PUT", body: payload });
+      } else {
+        await apiRequest("/ticket", { method: "POST", body: payload });
+      }
+      await renderTickets();
+    } catch (error) {
+      formAlert.textContent = handleProtectedError(error);
+      formAlert.classList.remove("hidden");
+      saveBtn.disabled = false;
+    }
   });
 
   cancelBtn.addEventListener("click", () => {
     form.reset();
     form.id.value = "";
-    form.querySelectorAll("input[name='tecnicos']").forEach((input) => {
-      input.checked = false;
-    });
   });
 
   app.querySelectorAll("[data-edit]").forEach((button) => {
     button.addEventListener("click", () => {
-      const id = Number(button.dataset.edit);
-      const ticket = tickets.find((t) => t.id === id);
+      const ticket = tickets.find((item) => item._id === button.dataset.edit);
       if (!ticket) return;
-      form.id.value = ticket.id;
-      form.cliente.value = String(ticket.clienteId);
-      form.prioridad.value = ticket.prioridad;
-      form.estado.value = ticket.estado;
-      form.asunto.value = ticket.asunto;
-      form.descripcion.value = ticket.descripcion;
-      form.querySelectorAll("input[name='tecnicos']").forEach((input) => {
-        input.checked = ticket.tecnicoIds.includes(Number(input.value));
-      });
+
+      form.id.value = ticket._id;
+      form.codigo.value = ticket.codigo || "";
+      form.descripcion.value = ticket.descripcion || "";
+      form.cliente.value = getEntityId(ticket.cliente);
+      form.tecnico.value = getEntityId(ticket.tecnico);
       form.scrollIntoView({ behavior: "smooth", block: "center" });
     });
   });
 
   app.querySelectorAll("[data-delete]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const id = Number(button.dataset.delete);
-      const filtered = tickets.filter((item) => item.id !== id);
-      writeStore(STORE_KEYS.tickets, filtered);
-      renderTickets();
+    button.addEventListener("click", async () => {
+      try {
+        await apiRequest(`/ticket/${button.dataset.delete}`, { method: "DELETE" });
+        await renderTickets();
+      } catch (error) {
+        formAlert.textContent = handleProtectedError(error);
+        formAlert.classList.remove("hidden");
+      }
     });
   });
 }
@@ -715,6 +782,13 @@ logoutBtn.addEventListener("click", () => {
   updateNav();
   window.location.hash = "#/login";
 });
+
+window.addEventListener("hashchange", () => {
+  renderRoute();
+});
+
+renderRoute();
+
 
 ensureSeedData();
 window.addEventListener("hashchange", renderRoute);
