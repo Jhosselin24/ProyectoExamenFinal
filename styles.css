@@ -285,6 +285,11 @@ textarea {
   font-size: 13px;
 }
 
+.alert.ok {
+  background: rgba(94, 215, 162, 0.2);
+  color: var(--ok);
+}
+
 .footer {
   padding: 20px 6vw 30px;
   color: var(--muted);
